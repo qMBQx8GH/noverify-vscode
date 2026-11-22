@@ -1,0 +1,118 @@
+{
+  "name": "noverify",
+  "displayName": "NoVerify",
+  "description": "Shows the reports of the NoVerify PHP linter in the Problems panel.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.74.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "keywords": [
+    "php",
+    "noverify",
+    "lint",
+    "linter"
+  ],
+  "activationEvents": [
+    "onLanguage:php",
+    "workspaceContains:**/dev/phpat/noverify.yaml",
+    "workspaceContains:**/noverify.yaml"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "noverify.checkModule",
+        "title": "Check the module",
+        "category": "NoVerify"
+      },
+      {
+        "command": "noverify.clear",
+        "title": "Clear the reports",
+        "category": "NoVerify"
+      },
+      {
+        "command": "noverify.showOutput",
+        "title": "Show the output",
+        "category": "NoVerify"
+      }
+    ],
+    "configuration": {
+      "title": "NoVerify",
+      "properties": {
+        "noverify.executable": {
+          "type": "string",
+          "default": "noverify",
+          "scope": "machine-overridable",
+          "markdownDescription": "The noverify binary: a path or a name. A name is looked for in the `PATH`, then in `$GOBIN`, `$GOPATH/bin` and `~/go/bin`."
+        },
+        "noverify.configFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "dev/phpat/noverify.yaml",
+            "noverify.yaml"
+          ],
+          "scope": "resource",
+          "markdownDescription": "The paths of the config file (`noverify check -c`) relative to a directory. The extension looks for them in the directory of the saved file and then in its parents, so the config of a module is found from any file of the module."
+        },
+        "noverify.runOnSave": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Check the module when a PHP file is saved."
+        },
+        "noverify.runOnOpen": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Check the module when its first PHP file is opened."
+        },
+        "noverify.minimumLevel": {
+          "type": "string",
+          "enum": [
+            "notice",
+            "warning",
+            "error"
+          ],
+          "enumDescriptions": [
+            "Show everything: errors, warnings and the \"maybe\" notices.",
+            "Show errors and warnings.",
+            "Show errors only."
+          ],
+          "default": "notice",
+          "scope": "resource",
+          "description": "The lowest level of the reports that are shown."
+        },
+        "noverify.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "Extra arguments of `noverify check`, for example `[\"--exclude-checks\", \"unused\"]`."
+        },
+        "noverify.timeout": {
+          "type": "number",
+          "default": 600,
+          "minimum": 5,
+          "scope": "resource",
+          "description": "The time limit of a check, seconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository --skip-license"
+  }
+}
