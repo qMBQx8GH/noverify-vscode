@@ -49,6 +49,36 @@ class ThemeColor {
   }
 }
 
+class EventEmitter {
+  constructor() {
+    this.listeners = [];
+    this.fired = [];
+    this.event = (listener) => {
+      this.listeners.push(listener);
+      return { dispose: () => (this.listeners = this.listeners.filter((l) => l !== listener)) };
+    };
+  }
+  fire(data) {
+    this.fired.push(data);
+    this.listeners.forEach((l) => l(data));
+  }
+  dispose() {
+    this.listeners = [];
+  }
+}
+
+class FileDecoration {
+  constructor(badge, tooltip, color) {
+    if (badge !== undefined && (typeof badge !== 'string' || badge.length > 2)) {
+      throw new Error('The "badge"-property must be a short character'); // like in VS Code
+    }
+    this.badge = badge;
+    this.tooltip = tooltip;
+    this.color = color;
+    this.propagate = undefined;
+  }
+}
+
 function disposable(fn) {
   return { dispose: fn || (() => {}) };
 }
@@ -57,7 +87,7 @@ function createVscode(options = {}) {
   const settings = options.settings || {};
   const folders = (options.folders || []).map((p) => ({ uri: Uri.file(p), name: path.basename(p) }));
 
-  const handlers = { save: [], open: [], activeEditor: [] };
+  const handlers = { save: [], open: [], activeEditor: [], config: [] };
   const commands = new Map();
   const state = {
     errors: [],
@@ -122,6 +152,8 @@ function createVscode(options = {}) {
     Range,
     Diagnostic,
     ThemeColor,
+    EventEmitter,
+    FileDecoration,
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
     DiagnosticTag: { Unnecessary: 1, Deprecated: 2 },
     StatusBarAlignment: { Left: 1, Right: 2 },
@@ -146,6 +178,12 @@ function createVscode(options = {}) {
         state.infos.push(message);
         return Promise.resolve(undefined);
       },
+      registerFileDecorationProvider: (provider) => {
+        state.decorationProvider = provider;
+        return disposable(() => {
+          state.decorationProvider = undefined;
+        });
+      },
       showQuickPick: (items) => {
         state.quickPicks.push(items);
         return Promise.resolve(state.quickPickAnswer ? state.quickPickAnswer(items) : undefined);
@@ -162,6 +200,10 @@ function createVscode(options = {}) {
         },
       }),
       getWorkspaceFolder: (uri) => folders.find((f) => uri.fsPath === f.uri.fsPath || uri.fsPath.startsWith(f.uri.fsPath + path.sep)),
+      onDidChangeConfiguration: (h) => {
+        handlers.config.push(h);
+        return disposable();
+      },
       onDidSaveTextDocument: (h) => {
         handlers.save.push(h);
         return disposable();
@@ -209,6 +251,9 @@ function createVscode(options = {}) {
     },
     open(doc) {
       handlers.open.forEach((h) => h(doc));
+    },
+    changeConfiguration(setting) {
+      handlers.config.forEach((h) => h({ affectsConfiguration: (name) => setting.startsWith(name) }));
     },
     setActiveEditor(doc) {
       vscode.window.activeTextEditor = doc ? { document: doc } : undefined;

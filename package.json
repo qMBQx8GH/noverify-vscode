@@ -2,7 +2,7 @@
   "name": "noverify",
   "displayName": "NoVerify",
   "description": "Shows the reports of the NoVerify PHP linter in the Problems panel.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "private": true,
   "license": "UNLICENSED",
@@ -100,6 +100,12 @@
           "default": [],
           "scope": "resource",
           "markdownDescription": "Extra arguments of `noverify check`, for example `[\"--exclude-checks\", \"unused\"]`."
+        },
+        "noverify.explorerDecorations": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Show the number of the NoVerify reports on the files and folders in the file explorer (a folder has the sum of its files). More than 99 is shown as `\u221e`, the exact number is in the tooltip."
         },
         "noverify.timeout": {
           "type": "number",

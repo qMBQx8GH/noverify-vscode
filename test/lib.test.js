@@ -362,3 +362,120 @@ test('SingleFlight: the keys are independent, an error does not stop it', async 
   await flight.request('bad'); // and can run again
   assert.deepEqual(started, ['a', 'b', 'bad', 'bad']);
 });
+
+const counts = (error, warning, info) => ({ error, warning, info });
+
+test('countProblems', () => {
+  assert.deepEqual(lib.countProblems([]), counts(0, 0, 0));
+  assert.deepEqual(
+    lib.countProblems([{ severity: 'error' }, { severity: 'warning' }, { severity: 'error' }, { severity: 'info' }]),
+    counts(2, 1, 1)
+  );
+});
+
+test('aggregateCounts: a directory has the sum of its files up to the root', () => {
+  const root = path.join(path.sep, 'w', 'modules');
+  const f = (rel) => path.join(root, rel);
+  const result = lib.aggregateCounts(
+    [
+      new Map([
+        [f('clouds/lib/a.php'), counts(2, 0, 0)],
+        [f('clouds/lib/deep/b.php'), counts(0, 1, 0)],
+        [f('clouds/tests/c.php'), counts(0, 0, 1)],
+        [f('clouds/lib/clean.php'), counts(0, 0, 0)], // a file without problems is not counted
+      ]),
+    ],
+    () => root
+  );
+
+  assert.deepEqual(result.get(f('clouds/lib/a.php')), counts(2, 0, 0));
+  assert.deepEqual(result.get(f('clouds/lib/deep/b.php')), counts(0, 1, 0));
+  assert.deepEqual(result.get(f('clouds/lib/deep')), counts(0, 1, 0));
+  assert.deepEqual(result.get(f('clouds/lib')), counts(2, 1, 0));
+  assert.deepEqual(result.get(f('clouds/tests')), counts(0, 0, 1));
+  assert.deepEqual(result.get(f('clouds')), counts(2, 1, 1));
+  assert.deepEqual(result.get(root), counts(2, 1, 1));
+
+  assert.ok(!result.has(f('clouds/lib/clean.php')));
+  assert.ok(!result.has(path.dirname(root)), 'not above the root');
+  assert.ok(!result.has(path.sep));
+});
+
+test('aggregateCounts: several configs, a file without a root, a file outside of the root', () => {
+  const root = path.join(path.sep, 'w', 'modules');
+  const f = (rel) => path.join(root, rel);
+  const outside = path.join(path.sep, 'other', 'x.php');
+  const nowhere = path.join(path.sep, 'free', 'y.php');
+
+  const result = lib.aggregateCounts(
+    [
+      new Map([[f('clouds/a.php'), counts(1, 0, 0)]]),
+      new Map([
+        [f('perfmon/p.php'), counts(0, 2, 0)],
+        [outside, counts(1, 0, 0)],
+        [nowhere, counts(0, 0, 3)],
+      ]),
+    ],
+    (file) => (file === nowhere ? null : file === outside ? root : root)
+  );
+
+  assert.deepEqual(result.get(root), counts(1, 2, 0), 'the sum of the configs');
+  assert.deepEqual(result.get(f('clouds')), counts(1, 0, 0));
+  assert.deepEqual(result.get(f('perfmon')), counts(0, 2, 0));
+
+  // The file is counted, its directories are not: there is no root.
+  assert.deepEqual(result.get(nowhere), counts(0, 0, 3));
+  assert.ok(!result.has(path.dirname(nowhere)));
+  // A file that is not inside of its root does not add to the directories.
+  assert.deepEqual(result.get(outside), counts(1, 0, 0));
+  assert.ok(!result.has(path.dirname(outside)));
+});
+
+test('aggregateCounts: nothing', () => {
+  assert.equal(lib.aggregateCounts([], () => '/r').size, 0);
+  assert.equal(lib.aggregateCounts([new Map()], () => '/r').size, 0);
+});
+
+test('changedKeys', () => {
+  const before = new Map([
+    ['a', counts(1, 0, 0)],
+    ['b', counts(0, 1, 0)],
+    ['gone', counts(0, 0, 1)],
+  ]);
+  const after = new Map([
+    ['a', counts(1, 0, 0)], // the same
+    ['b', counts(0, 2, 0)], // changed
+    ['new', counts(1, 1, 1)],
+  ]);
+
+  assert.deepEqual(lib.changedKeys(before, after).sort(), ['b', 'gone', 'new']);
+  assert.deepEqual(lib.changedKeys(after, after), []);
+  assert.deepEqual(lib.changedKeys(new Map(), new Map()), []);
+});
+
+test('badgeText: at most two characters', () => {
+  assert.equal(lib.badgeText(0), undefined);
+  assert.equal(lib.badgeText(-1), undefined);
+  assert.equal(lib.badgeText(undefined), undefined);
+  assert.equal(lib.badgeText(1), '1');
+  assert.equal(lib.badgeText(9), '9');
+  assert.equal(lib.badgeText(10), '10');
+  assert.equal(lib.badgeText(99), '99');
+  assert.equal(lib.badgeText(100), '∞');
+  assert.equal(lib.badgeText(123456), '∞');
+  for (const n of [1, 9, 10, 99, 100, 1000]) {
+    assert.ok(lib.badgeText(n).length <= 2, `badge of ${n}`);
+  }
+});
+
+test('dominantSeverity and describeCounts', () => {
+  assert.equal(lib.dominantSeverity(counts(1, 5, 5)), 'error');
+  assert.equal(lib.dominantSeverity(counts(0, 5, 5)), 'warning');
+  assert.equal(lib.dominantSeverity(counts(0, 0, 5)), 'info');
+  assert.equal(lib.dominantSeverity(counts(0, 0, 0)), null);
+
+  assert.equal(lib.describeCounts(counts(2, 1, 3)), 'NoVerify: 2 errors, 1 warning, 3 notices');
+  assert.equal(lib.describeCounts(counts(1, 0, 0)), 'NoVerify: 1 error');
+  assert.equal(lib.describeCounts(counts(0, 0, 1)), 'NoVerify: 1 notice');
+  assert.equal(lib.describeCounts(counts(0, 7, 0)), 'NoVerify: 7 warnings');
+});

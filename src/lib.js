@@ -359,7 +359,164 @@ class SingleFlight {
   }
 }
 
+/**
+ * @typedef {{error: number, warning: number, info: number}} Counts
+ */
+
+/**
+ * The number of the problems of every severity.
+ *
+ * @param {Problem[]} problems
+ * @returns {Counts}
+ */
+function countProblems(problems) {
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const p of problems) {
+    counts[p.severity]++;
+  }
+  return counts;
+}
+
+/**
+ * The number of the problems per file and per directory for the file explorer.
+ * A directory has the sum of its files, up to the root (inclusive), so a module and the
+ * folders of it show how many problems are inside.
+ *
+ * @param {Iterable<Map<string, Counts>>} fileCountsList the counts per file, one map per config
+ * @param {(file: string) => string|null|undefined} rootOf the topmost directory to sum up to (a workspace folder);
+ *   the directories of a file without a root are not counted
+ * @returns {Map<string, Counts>}
+ */
+function aggregateCounts(fileCountsList, rootOf) {
+  /** @type {Map<string, Counts>} */
+  const result = new Map();
+
+  const add = (key, counts) => {
+    let sum = result.get(key);
+    if (!sum) {
+      sum = { error: 0, warning: 0, info: 0 };
+      result.set(key, sum);
+    }
+    sum.error += counts.error;
+    sum.warning += counts.warning;
+    sum.info += counts.info;
+  };
+
+  for (const fileCounts of fileCountsList) {
+    for (const [file, counts] of fileCounts) {
+      if (counts.error + counts.warning + counts.info === 0) {
+        continue;
+      }
+
+      add(file, counts);
+
+      const root = rootOf(file);
+      if (!root) {
+        continue;
+      }
+      let dir = path.dirname(file);
+      for (;;) {
+        // Only the directories inside of the root.
+        if (dir !== root && !dir.startsWith(root + path.sep)) {
+          break;
+        }
+        add(dir, counts);
+        if (dir === root) {
+          break;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) {
+          break;
+        }
+        dir = parent;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * The keys of the two maps of the counts whose counts differ (a key can be only in one of them).
+ *
+ * @param {Map<string, Counts>} before
+ * @param {Map<string, Counts>} after
+ * @returns {string[]}
+ */
+function changedKeys(before, after) {
+  const same = (a, b) => a && b && a.error === b.error && a.warning === b.warning && a.info === b.info;
+
+  const changed = [];
+  for (const [key, counts] of after) {
+    if (!same(counts, before.get(key))) {
+      changed.push(key);
+    }
+  }
+  for (const key of before.keys()) {
+    if (!after.has(key)) {
+      changed.push(key);
+    }
+  }
+  return changed;
+}
+
+/**
+ * The badge of the file explorer: at most two characters, so 100 and more is a sign of infinity.
+ *
+ * @param {number} total
+ * @returns {string|undefined}
+ */
+function badgeText(total) {
+  if (!(total > 0)) {
+    return undefined;
+  }
+  return total <= 99 ? String(total) : '\u221e';
+}
+
+/**
+ * The most important severity of the counts: it is the color of the badge.
+ *
+ * @param {Counts} counts
+ * @returns {'error'|'warning'|'info'|null}
+ */
+function dominantSeverity(counts) {
+  if (counts.error) {
+    return 'error';
+  }
+  if (counts.warning) {
+    return 'warning';
+  }
+  return counts.info ? 'info' : null;
+}
+
+/**
+ * The tooltip of the badge: "NoVerify: 2 errors, 1 warning, 3 notices".
+ *
+ * @param {Counts} counts
+ * @returns {string}
+ */
+function describeCounts(counts) {
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const parts = [];
+  if (counts.error) {
+    parts.push(plural(counts.error, 'error', 'errors'));
+  }
+  if (counts.warning) {
+    parts.push(plural(counts.warning, 'warning', 'warnings'));
+  }
+  if (counts.info) {
+    parts.push(plural(counts.info, 'notice', 'notices'));
+  }
+  return 'NoVerify: ' + parts.join(', ');
+}
+
 module.exports = {
+  aggregateCounts,
+  badgeText,
+  changedKeys,
+  countProblems,
+  describeCounts,
+  dominantSeverity,
   LEVEL_ERROR,
   LEVEL_WARNING,
   LEVEL_NOTICE,

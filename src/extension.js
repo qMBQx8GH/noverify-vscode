@@ -51,6 +51,12 @@ function createExtension(vscode, deps = {}) {
   /** the notifications that are shown once */
   const notified = new Set();
 
+  /** config path -> file -> the number of the problems of the file */
+  const fileCounts = new Map();
+  /** file or directory -> the number of the problems (of the files inside, for a directory) */
+  let decorationCounts = new Map();
+  const decorationsChanged = new vscode.EventEmitter();
+
   let lastStatus = null;
   let lastErrorMessage = '';
   let disposed = false;
@@ -69,6 +75,7 @@ function createExtension(vscode, deps = {}) {
       minimumLevel: c.get('minimumLevel', 'notice'),
       extraArgs: c.get('extraArgs', []),
       timeout: c.get('timeout', 600),
+      explorerDecorations: c.get('explorerDecorations', true),
     };
   }
 
@@ -354,7 +361,59 @@ function createExtension(vscode, deps = {}) {
     }
 
     published.set(configPath, next);
+
+    const counts = new Map();
+    for (const [filename, problems] of parsed.byFile) {
+      counts.set(filename, lib.countProblems(problems));
+    }
+    fileCounts.set(configPath, counts);
+    refreshDecorations();
   }
+
+  // --- the file explorer: the number of the problems of the files and the folders ---
+
+  function rootOf(file) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+    return folder ? folder.uri.fsPath : null;
+  }
+
+  /** Counts the problems again and tells VS Code which files and folders changed. */
+  function refreshDecorations() {
+    const next = lib.aggregateCounts(fileCounts.values(), rootOf);
+    const changed = lib.changedKeys(decorationCounts, next);
+    decorationCounts = next;
+
+    if (changed.length) {
+      decorationsChanged.fire(changed.map((file) => vscode.Uri.file(file)));
+    }
+  }
+
+  const decorationProvider = {
+    onDidChangeFileDecorations: decorationsChanged.event,
+
+    provideFileDecoration(uri) {
+      if (uri.scheme !== 'file') {
+        return undefined;
+      }
+
+      const counts = decorationCounts.get(uri.fsPath);
+      const severity = counts && lib.dominantSeverity(counts);
+      if (!severity || !settings(uri).explorerDecorations) {
+        return undefined;
+      }
+
+      const color = new vscode.ThemeColor(
+        { error: 'list.errorForeground', warning: 'list.warningForeground', info: 'editorInfo.foreground' }[severity]
+      );
+      const decoration = new vscode.FileDecoration(
+        lib.badgeText(counts.error + counts.warning + counts.info),
+        lib.describeCounts(counts),
+        color
+      );
+      decoration.propagate = false; // a folder has its own sum
+      return decoration;
+    },
+  };
 
   // --- the triggers ---
 
@@ -456,6 +515,8 @@ function createExtension(vscode, deps = {}) {
   function clear() {
     diagnostics.clear();
     published.clear();
+    fileCounts.clear();
+    refreshDecorations();
     lastErrorMessage = '';
     setStatus({ state: 'idle' });
   }
@@ -475,7 +536,16 @@ function createExtension(vscode, deps = {}) {
       vscode.commands.registerCommand('noverify.checkModule', checkModule),
       vscode.commands.registerCommand('noverify.clear', clear),
       vscode.commands.registerCommand('noverify.showOutput', () => output.show(true)),
+      decorationsChanged,
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('noverify.explorerDecorations')) {
+          decorationsChanged.fire(undefined); // everything is asked again
+        }
+      }),
     ];
+    if (typeof vscode.window.registerFileDecorationProvider === 'function') {
+      subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
+    }
     for (const s of subscriptions) {
       context.subscriptions.push(s);
     }
@@ -510,7 +580,7 @@ function createExtension(vscode, deps = {}) {
     }
   }
 
-  return { activate, deactivate, checkModule, clear, idle };
+  return { activate, deactivate, checkModule, clear, idle, decorationProvider };
 }
 
 let instance = null;

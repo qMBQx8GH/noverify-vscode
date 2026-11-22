@@ -578,3 +578,230 @@ test('the offsets are bytes: the report of a line with Cyrillic', async () => {
     t.cleanup();
   }
 });
+
+// --- the file explorer ---
+
+function decorationOf(t, file) {
+  return t.fake.state.decorationProvider.provideFileDecoration(t.fake.vscode.Uri.file(file));
+}
+
+test('the file explorer: the number of the problems of the files and of the folders', async () => {
+  const t = setup();
+  try {
+    assert.ok(t.fake.state.decorationProvider, 'the provider is registered');
+
+    t.control({
+      reports: [
+        t.report(t.files.a),
+        t.report(t.files.a, { line: 9 }),
+        t.report(t.files.b, { check_name: 'unused', level: 2, message: 'Variable $x is unused', line: 2 }),
+        t.report(t.files.c, { check_name: 'deprecated', level: 3, message: 'old' }),
+      ],
+    });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+
+    const Color = t.fake.vscode.ThemeColor;
+
+    // The files.
+    const a = decorationOf(t, t.files.a);
+    assert.equal(a.badge, '2');
+    assert.equal(a.tooltip, 'NoVerify: 2 errors');
+    assert.deepEqual(a.color, new Color('list.errorForeground'));
+    assert.equal(a.propagate, false);
+
+    const b = decorationOf(t, t.files.b);
+    assert.equal(b.badge, '1');
+    assert.equal(b.tooltip, 'NoVerify: 1 warning');
+    assert.deepEqual(b.color, new Color('list.warningForeground'));
+
+    const c = decorationOf(t, t.files.c);
+    assert.equal(c.badge, '1');
+    assert.equal(c.tooltip, 'NoVerify: 1 notice');
+    assert.deepEqual(c.color, new Color('editorInfo.foreground'));
+
+    // The folders have the sum, the color is of the worst problem.
+    const lib = decorationOf(t, path.join(t.modules, 'clouds/lib'));
+    assert.equal(lib.badge, '3');
+    assert.equal(lib.tooltip, 'NoVerify: 2 errors, 1 warning');
+    assert.deepEqual(lib.color, new Color('list.errorForeground'));
+
+    const deep = decorationOf(t, path.join(t.modules, 'clouds/lib/deep'));
+    assert.equal(deep.badge, '1');
+    assert.deepEqual(deep.color, new Color('list.warningForeground'));
+
+    const tests = decorationOf(t, path.join(t.modules, 'clouds/tests'));
+    assert.equal(tests.badge, '1');
+    assert.deepEqual(tests.color, new Color('editorInfo.foreground'));
+
+    const module = decorationOf(t, path.join(t.modules, 'clouds'));
+    assert.equal(module.badge, '4');
+    assert.equal(module.tooltip, 'NoVerify: 2 errors, 1 warning, 1 notice');
+
+    // The root of the workspace has the sum too, the parent of it does not.
+    assert.equal(decorationOf(t, t.modules).badge, '4');
+    assert.equal(decorationOf(t, t.root), undefined);
+
+    // The other module and a file without problems have nothing.
+    assert.equal(decorationOf(t, path.join(t.modules, 'main')), undefined);
+    assert.equal(decorationOf(t, t.files.main), undefined);
+    assert.equal(decorationOf(t, t.files.readme), undefined);
+
+    // Not a file.
+    const remote = t.fake.vscode.Uri.file(t.files.a);
+    remote.scheme = 'vscode-remote';
+    assert.equal(t.fake.state.decorationProvider.provideFileDecoration(remote), undefined);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the file explorer: the badge has at most two characters', async () => {
+  const t = setup();
+  try {
+    const many = [];
+    for (let i = 0; i < 150; i++) {
+      many.push(t.report(t.files.a, { line: i + 1, message: 'm' + i }));
+    }
+    many.push(t.report(t.files.b));
+    t.control({ reports: many });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle(); // FileDecoration of the fake throws for a badge of 3 characters
+
+    assert.equal(decorationOf(t, t.files.a).badge, '∞');
+    assert.equal(decorationOf(t, t.files.a).tooltip, 'NoVerify: 150 errors', 'the exact number is in the tooltip');
+    assert.equal(decorationOf(t, t.files.b).badge, '1');
+    assert.equal(decorationOf(t, path.join(t.modules, 'clouds')).tooltip, 'NoVerify: 151 errors');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the file explorer: VS Code is told about the changed files and folders only', async () => {
+  const t = setup();
+  try {
+    const emitted = [];
+    t.fake.state.decorationProvider.onDidChangeFileDecorations((uris) => emitted.push((uris || []).map((u) => u.fsPath).sort()));
+
+    t.control({ reports: [t.report(t.files.a), t.report(t.files.c)] });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+
+    const lib = path.join(t.modules, 'clouds/lib');
+    const tests = path.join(t.modules, 'clouds/tests');
+    const module = path.join(t.modules, 'clouds');
+    assert.equal(emitted.length, 1);
+    assert.deepEqual(emitted[0], [t.files.a, t.files.c, lib, tests, module, t.modules].sort());
+
+    // Nothing changed: no event.
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+    assert.equal(emitted.length, 1);
+
+    // c is fixed, b is a new one: a and lib stay, the rest is updated.
+    t.control({ reports: [t.report(t.files.a), t.report(t.files.b)] });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+
+    assert.equal(emitted.length, 2);
+    assert.deepEqual(emitted[1], [t.files.c, t.files.b, tests, path.join(t.modules, 'clouds/lib/deep'), lib].sort());
+    assert.equal(decorationOf(t, t.files.c), undefined, 'the fixed file has no badge');
+    assert.equal(decorationOf(t, tests), undefined);
+    assert.equal(decorationOf(t, lib).badge, '2');
+    assert.equal(decorationOf(t, module).badge, '2');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the file explorer: the clear command removes the badges', async () => {
+  const t = setup();
+  try {
+    t.control({ reports: [t.report(t.files.a)] });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+    assert.equal(decorationOf(t, t.files.a).badge, '1');
+
+    await t.fake.vscode.commands.executeCommand('noverify.clear');
+    assert.equal(decorationOf(t, t.files.a), undefined);
+    assert.equal(decorationOf(t, path.join(t.modules, 'clouds')), undefined);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the file explorer: two modules are counted separately and together at the root', async () => {
+  const t = setup();
+  try {
+    const config2 = path.join(t.modules, 'perfmon/dev/phpat/noverify.yaml');
+    fs.mkdirSync(path.dirname(config2), { recursive: true });
+    fs.writeFileSync(config2, 'paths:\n  - ../..\n');
+    const p = path.join(t.modules, 'perfmon/lib/p.php');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, '<?php\n');
+
+    t.control({ reports: [t.report(t.files.a)] });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+    t.control({ reports: [t.report(p), t.report(p, { line: 8 })] });
+    t.fake.save(t.fake.doc(p));
+    await t.ext.idle();
+
+    assert.equal(decorationOf(t, path.join(t.modules, 'clouds')).badge, '1');
+    assert.equal(decorationOf(t, path.join(t.modules, 'perfmon')).badge, '2');
+    assert.equal(decorationOf(t, t.modules).badge, '3');
+
+    // The second module is fixed: the first one is not touched.
+    t.control({ reports: [] });
+    t.fake.save(t.fake.doc(p));
+    await t.ext.idle();
+    assert.equal(decorationOf(t, path.join(t.modules, 'perfmon')), undefined);
+    assert.equal(decorationOf(t, path.join(t.modules, 'clouds')).badge, '1');
+    assert.equal(decorationOf(t, t.modules).badge, '1');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the file explorer: the setting turns it off, the change of it asks VS Code again', async () => {
+  const t = setup();
+  try {
+    t.control({ reports: [t.report(t.files.a)] });
+    t.fake.save(t.fake.doc(t.files.a));
+    await t.ext.idle();
+    assert.equal(decorationOf(t, t.files.a).badge, '1');
+
+    const emitted = [];
+    t.fake.state.decorationProvider.onDidChangeFileDecorations((uris) => emitted.push(uris));
+
+    t.fake.settings['noverify.explorerDecorations'] = false;
+    t.fake.changeConfiguration('noverify.explorerDecorations');
+    assert.deepEqual(emitted, [undefined], 'everything is asked again');
+    assert.equal(decorationOf(t, t.files.a), undefined);
+    assert.equal(decorationOf(t, path.join(t.modules, 'clouds')), undefined);
+
+    // The problems panel is not affected.
+    assert.equal(t.fake.collection.files().length, 1);
+
+    t.fake.settings['noverify.explorerDecorations'] = true;
+    t.fake.changeConfiguration('noverify.explorerDecorations');
+    assert.equal(decorationOf(t, t.files.a).badge, '1');
+
+    // Other settings do not ask again.
+    t.fake.changeConfiguration('noverify.runOnSave');
+    assert.equal(emitted.length, 2);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('the file explorer: an older VS Code without the API is not a problem', async () => {
+  const t = setup();
+  t.cleanup();
+
+  const fake = createVscode({ folders: [t.modules], settings: {} });
+  delete fake.vscode.window.registerFileDecorationProvider;
+  const ext = createExtension(fake.vscode, { env: process.env, debounceMs: 0 });
+  ext.activate({ subscriptions: [] }); // does not throw
+  ext.deactivate();
+});
